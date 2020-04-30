@@ -33,7 +33,7 @@ class router():
         file = open(config)
 
         # Set router ID:
-        self.router_ID = int(file.readline().split()[1])
+        self.router_ID = int(file.readline().split(' ')[1])
         if self.router_ID < 1 or self.router_ID > 64000:
             self.error("Router ID not within range 1 < x x 64000")
         
@@ -57,7 +57,8 @@ class router():
 
         # Bind input ports to a socket
         self.start_sockets()
-
+        
+        self.create_route_table(self.router_ID, self.input_ports,self.output_ports)
         # Start the infinite loop
         self.loop()
 
@@ -75,7 +76,7 @@ class router():
     
     
     def rip_version_check(self, value):
-        "Returns false if the rip version != 2, might indicate transmission error"
+        "Returns false if the rip version != 2, could indicate transmission error"
         return True if value == 2 else False
 
 
@@ -114,21 +115,45 @@ class router():
     def loop(self):
         """
         """
-        raise NotImplementedError("This isn't working yet, pls come back later")
-    
+        self.print_route_table()
+        self.add_route_to_table(('5', '9696'), 3)
+        self.print_route_table()
+        working = True
+        n = 0
+        while working:
+            some_input = input("to exit, press Q")
+            if some_input == "Q":
+                working = False
     
     
     def rip_packet_header(self):
         "what every packet needs for its header"
         packet_to_send = bytearray()
-        command = int(bin(0).zfill(8),1) 
-        packet_to_send += (command).to_bytes(1, byteorder="big")
-        version_num = int(bin(2).zfill(8),1)
+        command = int(bin(0)[2:].zfill(8))
+        packet_to_send += command.to_bytes(1, byteorder="big")
+        version_num = int(bin(2)[2:].zfill(8))
         packet_to_send += (version_num).to_bytes(1, byteorder="big")
-        THIS_HAS_TO_BE_ZERO = int(bin(0).zfill(16),2)
+        THIS_HAS_TO_BE_ZERO = int(bin(0)[2:].zfill(16))
         packet_to_send += (THIS_HAS_TO_BE_ZERO).to_bytes(2, byteorder="big")
+        packet_to_send += rip_entry()
+        return packet_to_send
         
-        
+                
+    def rip_entry(self):
+        new_pkt = bytearray()
+        address_family = int(bin(2)[2:].zfill(8))
+        new_pkt += address_family.to_bytes(1, byteorder="big")
+        must_be_zero = int(bin(0)[2:].zfill(16))
+        new_pkt += must_be_zero.to_bytes(2, byteorder="big")
+        rip_des = destination.to_bytes(2, byteorder="big")
+        new_pkt += rip_des
+        return new_pkt
+    
+    def triggered_update(self):
+        """for when a route becomes invalid"""
+        raise NotImplementedError
+    
+    
     def send_packet(self):
         "sending the packet to the other 'routers'"
         raise NotImplementedError
@@ -138,7 +163,6 @@ class router():
         "creating the route table"
         route_table = {}
         for port in output_ports:
-            port = port.split('-')
             value = (port[2], port[0])
             route_table[value] = port[1]
         self.route_table = route_table
@@ -146,23 +170,30 @@ class router():
     
     def add_route_to_table(self, route, metric):
         "adding a route to the route table. The key needs to be (router_id, portnum)"
-        route_table[route] += metric
+        self.route_table[route] = metric
+        self.triggered_update()
     
     
-    def modify_route_in_table(self, route, n=1):
-        "modifying a route in the table"
+    def modify_route(self, route, n=1):
+        "modifys the metric value of a route in the table"
         route_table[route] += n
+        if route_table[route] > 15:
+            route_table[route] = 'INF'
+        self.triggered_update()
     
     
     def delete_route_in_table(self, route):
         "deleting a route in the table"
         try:
-            route_table.delete(route)
-        except:
+            del route_table[route]
+            self.triggered_update()
+        except KeyError:
             return self.error("Route is not in the table")
     
+    
     def print_route_table(self):
-        for key, metric in route_table.items():
+        print("Current routing table for Router {}:".format(self.router_ID))
+        for key, metric in self.route_table.items():
             print("Router ID: {} | Port Number: {} | Metric: {}".format(key[0], key[1], metric))
     
     
@@ -173,7 +204,8 @@ class router():
         good_value = metric_check(value)
         if good_value is False:
             self.error("Route is gone")
-        
+
+ 
     
 def main(param):
     """
@@ -191,3 +223,5 @@ def main(param):
 
 if __name__ == "__main__":
     param = sys.argv
+    param = ['0', 'conf.cfg']
+    main(param)

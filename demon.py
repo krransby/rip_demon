@@ -84,12 +84,13 @@ class router():
         """
         Print an error message in the console and close the demon
         """
-        print("Error:", message)
-
-        # Ensure that all input sockets are closed before exiting
-        for sock in self.input_sockets:
-            sock.close()
-
+        if exit_code == 0:
+            print("All is well, cya!")
+        else:
+            print("Error:", message)
+            # Ensure that all input sockets are closed before exiting
+            for sock in self.input_sockets:
+                sock.close()
         sys.exit(exit_code)
 
 
@@ -99,7 +100,7 @@ class router():
         """
         try:
             for port in self.input_ports:
-                if type(port) != type(1):
+                if type(port) != type(1): #Checking to see if 'port' is an integer
                     break
 
                 temp_socket = socket.socket()
@@ -118,40 +119,40 @@ class router():
         self.print_route_table()
         self.add_route_to_table(('5', '9696'), 3)
         self.print_route_table()
-        working = True
-        n = 0
-        while working:
-            some_input = input("to exit, press Q")
-            if some_input == "Q":
-                working = False
+        self.modify_route(('5', '9696'), 3)
+        self.print_route_table()
+        self.error("", 0)
+        
     
-    
-    def rip_packet_header(self):
+    def rip_packet_header(self, destination):
         "what every packet needs for its header"
         packet_to_send = bytearray()
         command = int(bin(0)[2:].zfill(8))
         packet_to_send += command.to_bytes(1, byteorder="big")
+        
         version_num = int(bin(2)[2:].zfill(8))
         packet_to_send += (version_num).to_bytes(1, byteorder="big")
-        THIS_HAS_TO_BE_ZERO = int(bin(0)[2:].zfill(16))
-        packet_to_send += (THIS_HAS_TO_BE_ZERO).to_bytes(2, byteorder="big")
-        packet_to_send += rip_entry()
+        
+        rip_des = int(destination[0]).to_bytes(2, byteorder="big")
+        packet_to_send += rip_des
+        
+        packet_to_send += self.rip_entry(destination)
         return packet_to_send
         
                 
-    def rip_entry(self):
+    def rip_entry(self, destination):
         new_pkt = bytearray()
         address_family = int(bin(2)[2:].zfill(8))
         new_pkt += address_family.to_bytes(1, byteorder="big")
         must_be_zero = int(bin(0)[2:].zfill(16))
         new_pkt += must_be_zero.to_bytes(2, byteorder="big")
-        rip_des = destination.to_bytes(2, byteorder="big")
-        new_pkt += rip_des
         return new_pkt
     
-    def triggered_update(self):
+    
+    def triggered_update(self, a):
         """for when a route becomes invalid"""
-        raise NotImplementedError
+        result = None
+        result = self.rip_packet_header(a)
     
     
     def send_packet(self):
@@ -171,15 +172,15 @@ class router():
     def add_route_to_table(self, route, metric):
         "adding a route to the route table. The key needs to be (router_id, portnum)"
         self.route_table[route] = metric
-        self.triggered_update()
+        self.triggered_update(route)
     
     
     def modify_route(self, route, n=1):
         "modifys the metric value of a route in the table"
-        route_table[route] += n
-        if route_table[route] > 15:
-            route_table[route] = 'INF'
-        self.triggered_update()
+        self.route_table[route] += n
+        if self.route_table[route] > 15:
+            self.route_table[route] = 'INF'
+        #self.triggered_update()
     
     
     def delete_route_in_table(self, route):

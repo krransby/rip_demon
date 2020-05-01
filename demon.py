@@ -40,8 +40,11 @@ class router():
         # Set input ports:
         for port in file.readline().split()[1:]:
             tmp = int(port.rstrip(','))
-            self.input_ports.append(tmp)
-            self.port_check(tmp)
+            a = self.port_check(tmp)
+            if a == True:
+                self.input_ports.append(tmp)
+            else:
+                self.error("Input port needs to be in the range 1024 <= x <= 65535")
 
         # Set output ports:
         for port in file.readline().split()[1:]:
@@ -67,7 +70,7 @@ class router():
 
     def port_check(self, port):
         "Returns an error if the port is out of the allowed range"
-        return 0 if port >= 1024 or port <= 64000 else self.error("Port outside range 1024 <= x <= 64000")
+        return True if port >= 1024 or port <= 64000 else False
 
 
     def metric_check(self, metric):
@@ -104,8 +107,9 @@ class router():
                     break
 
                 temp_socket = socket.socket()
-                temp_socket.settimeout(1.0)
+                temp_socket.settimeout(5)
                 temp_socket.bind(('127.0.0.1', port))
+                temp_socket.listen()
 
                 self.input_sockets.append(temp_socket)
 
@@ -117,11 +121,8 @@ class router():
         """
         """
         self.print_route_table()
-        self.add_route_to_table(('5', '9696'), 3)
-        self.print_route_table()
-        self.modify_route(('5', '9696'), 3)
-        self.print_route_table()
-        self.error("", 0)
+       # self.error("", 0)
+       
         
     
     def rip_packet_header(self, destination):
@@ -195,7 +196,7 @@ class router():
     def print_route_table(self):
         print("Current routing table for Router {}:".format(self.router_ID))
         for key, metric in self.route_table.items():
-            print("Router ID: {} | Port Number: {} | Metric: {}".format(key[0], key[1], metric))
+            print("Destination: {} | Via Link: {} | Metric: {}".format(key[0], key[1], metric))
     
     
     def process_packet(self, packet):
@@ -224,5 +225,5 @@ def main(param):
 
 if __name__ == "__main__":
     param = sys.argv
-    param = ['0', 'conf.cfg']
+    param = ['0', 'conf4.cfg']
     main(param)

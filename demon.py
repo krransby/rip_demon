@@ -10,11 +10,12 @@
 import os
 import sys
 import socket
-import datetime
+import threading
+import random
 
 class router():
     """
-    
+    Rip routing demon class
     """
 
     router_ID = 0
@@ -29,55 +30,112 @@ class router():
         """
         Function to read the config file
         """
-            
-        file = open(config)
-
-        # Set router ID:
-        self.router_ID = int(file.readline().split(' ')[1])
-        if self.router_ID < 1 or self.router_ID > 64000:
-            self.error("Router ID not within range 1 < x x 64000")
         
-        # Set input ports:
-        for port in file.readline().split()[1:]:
-            tmp = int(port.rstrip(','))
-            a = self.port_check(tmp)
-            if a == True:
-                self.input_ports.append(tmp)
-            else:
-                self.error("Input port needs to be in the range 1024 <= x <= 65535")
-
-        # Set output ports:
-        for port in file.readline().split()[1:]:
-            tmp = port.rstrip(',').split('-')
-            for i in range(3):
-                tmp[i] = int(tmp[i])
-            self.output_ports.append(tmp)
-            self.port_check(tmp[0])
-
-
+        # Open the given routers config file
+        file = open(config)
+        
+        # List used for ensuring all parameter are applied (only once)
+        required_parameters = ['router-id', 'input-ports', 'outputs']
+        
+        for line in file.readlines():
+            if line != '\n' and line[0] != '#': # Allowing for empty lines and comments in config files
+                
+                currentLine = line.rstrip().split(' ')
+                currentParameter = currentLine[0]
+                
+                # Set router ID
+                if currentParameter == 'router-id':
+                    
+                    if currentParameter in required_parameters: # See if 'router-id' has been recieved yet
+                        ID = int(currentLine[1])
+                        
+                        # Check if the router id is within the allowed range
+                        if self.router_id_check(ID):
+                            self.router_ID = ID
+                        else:
+                            self.error("Router ID ({}) not within range 1 <= x <= 64000".format(ID))
+                        
+                        required_parameters.remove(currentParameter) # remove 'router-id' from the required parameters list
+                    else:
+                        print("Router ID already set to {}. Omitting repeat declaration\n".format(self.router_ID))
+                
+                # Set input ports
+                elif currentParameter == 'input-ports':
+                    
+                    if currentParameter in required_parameters: # See if 'input-ports' has been recieved yet
+                        for portstr in currentLine[1:]:
+                            port = int(portstr.rstrip(','))
+                            
+                            if self.port_check(port):
+                                self.input_ports.append(port)
+                            else:
+                                self.error("Input port ({}) not within range 1024 <= x <= 65535".format(port))
+                        
+                        required_parameters.remove(currentParameter) # remove 'input-ports' from the required parameters list
+                    
+                    else:
+                        print("Input ports already set. Omitting repeat declaration\n")
+                
+                
+                # Set output ports
+                elif currentParameter == 'outputs':
+                    
+                    if currentParameter in required_parameters: # See if 'outputs' has been recieved yet
+                        for outputstr in currentLine[1:]:
+                            
+                            portstr, metricstr, idstr = outputstr.rstrip(',').split('-')
+                            
+                            if self.port_check(int(portstr)):
+                                if self.router_id_check(int(idstr)):
+                                    
+                                    self.output_ports.append([int(portstr), int(metricstr), int(idstr)])
+                                else:
+                                    self.error("Output router ID ({}) not within range 1 <= x <= 64000".format(int(idstr)))
+                            else:
+                                self.error("Output port ({}) not within range 1024 <= x <= 65535".format(int(portstr)))
+                        
+                        required_parameters.remove(currentParameter) # remove 'outputs' from the required parameters list
+                    else:
+                        print("Output ports already set. Omitting repeat declaration\n")
+                    
+                    
+                else: # Unknown parameter
+                    print("'{}' is an unknown parameter, omitting line\n".format(currentParameter))
+        
+        # Close the demon if the required parameters are not supplied
+        if len(required_parameters) > 0:
+            self.error("Missing essential parameter(s): {}. shutting down.".format(', '.join(required_parameters)))
+        
         # Close configuration file:
         file.close()
-
+        
         # Bind input ports to a socket
         self.start_sockets()
         
         self.create_route_table(self.router_ID, self.input_ports,self.output_ports)
+        
         # Start the infinite loop
         self.loop()
-
+        
         return
-    
+
+    def router_id_check(self, ID):
+        """
+        Returns an error if the router id is out of the allowed range
+        """
+        return True if ID >= 1 and ID <= 64000 else False
+
 
     def port_check(self, port):
         "Returns an error if the port is out of the allowed range"
-        return True if port >= 1024 or port <= 64000 else False
+        return True if port >= 1024 and port <= 64000 else False
 
 
     def metric_check(self, metric):
         "returns false if the metric is not within the bounds, will also trigger a dead-timer."
         return True if metric > 0 and metric < 16 else False
-    
-    
+
+
     def rip_version_check(self, value):
         "Returns false if the rip version != 2, could indicate transmission error"
         return True if value == 2 else False
@@ -91,9 +149,11 @@ class router():
             print("All is well, cya!")
         else:
             print("Error:", message)
-            # Ensure that all input sockets are closed before exiting
-            for sock in self.input_sockets:
-                sock.close()
+        
+        # Ensure that all input sockets are closed before exiting
+        for sock in self.input_sockets:
+            sock.close()
+        
         sys.exit(exit_code)
 
 
@@ -105,26 +165,37 @@ class router():
             for port in self.input_ports:
                 if type(port) != type(1): #Checking to see if 'port' is an integer
                     break
-
+                
                 temp_socket = socket.socket()
                 temp_socket.settimeout(5)
                 temp_socket.bind(('127.0.0.1', port))
                 temp_socket.listen()
-
+                
                 self.input_sockets.append(temp_socket)
-
+        
         except socket.error:
             self.error("Error creating socket connection")
+
+
+    def periodic_update(self):
+        "Function to handle periodic updates"
+        raise NotImplementedError
+        
 
 
     def loop(self):
         """
         """
-        self.print_route_table()
-       # self.error("", 0)
-       
         
-    
+        # Create a thread timer for a periodic update
+        # timerVal is the recommended range given on pg 7 of assignment handout
+        #timerVal = random.uniform((0.8 * 6), (1.2 * 6))
+        #periodic_update_timer = threading.Timer(timerVal, self.periodic_update)
+        #periodic_update_timer.start()
+        
+        self.print_route_table()
+
+
     def rip_packet_header(self, destination):
         "what every packet needs for its header"
         packet_to_send = bytearray()
@@ -197,7 +268,7 @@ class router():
         print("Current routing table for Router {}:".format(self.router_ID))
         for key, metric in self.route_table.items():
             print("Destination: {} | Via Link: {} | Metric: {}".format(key[0], key[1], metric))
-    
+        print()
     
     def process_packet(self, packet):
         #prehaps "decode" the packet
@@ -205,7 +276,7 @@ class router():
         #
         good_value = metric_check(value)
         if good_value is False:
-            self.error("Route is gone")
+            self.error("Route is gone.")
 
  
     

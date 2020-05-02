@@ -284,6 +284,17 @@ class router():
         """adding a route to the route table. The key needs to be (router_id, portnum)"""
         self.route_table[route] = metric
     
+    def convergence(sender_id, sender_metric):
+    """Using the current metirc and a given new metric and sender route_ID, see which of the two
+    has the better metric"""
+        current_best = None
+        for key, value in route_table.items():
+            if int(key[1]) == sender_id:
+                current_best = route_table[key]
+        if current_best != None:
+            best_route = min(current_best, (1 + sender_metric))
+            if best_route < current_best:
+                route_table[key] = best_route #this was editiied in at 20 past 1, don't judge 
     
     def modify_route(self, route, n=1):
         """modifys the metric value of a route in the table"""

@@ -1,10 +1,8 @@
 """
     COSC364: Assignment 1
     RIP routing demon
-
     Kayle Ransby (34043590)
     Sjaak Flick (36406121)
-
 """
 
 import os
@@ -23,7 +21,7 @@ class router():
     output_ports = []
 
     input_sockets = []
-    route_table = None
+    route_table = {}
     trash_panda_collector = 0
 
     def __init__(self, config):
@@ -112,7 +110,7 @@ class router():
         # Bind input ports to a socket
         self.start_sockets()
         
-        self.create_route_table(self.router_ID, self.input_ports,self.output_ports) # <---Can we do this? I thought the routing table should still be empty at this point ============
+        #I was testing adding entries to the route table, it probably shouln't be there..
         
         # Start the infinite loop
         self.loop()
@@ -204,6 +202,8 @@ class router():
         
         # command field
         command = 0 # <---Not sure what to put here ===========================================
+        #I've put in 2 in my version, since we are only implmenting the triggered and periodic updates
+        #which send the entire route table for some reason lol
         packet_to_send += command.to_bytes(1, byteorder="big")
         
         # version field
@@ -236,7 +236,8 @@ class router():
             if dest_router_id != destination[0]:
         
                 # address family
-                address_family = 5 # <---Not sure what to put here ===========================================
+                address_family = 2 # <---Not sure what to put here ===========================================
+                #I've looked, it should be 2
                 rip_entries += address_family.to_bytes(2, byteorder="big")
                 
                 # must be zero
@@ -244,6 +245,8 @@ class router():
                 rip_entries += must_be_zero.to_bytes(2, byteorder="big")
                 
                 # IPv4 address (we're to use the router ID for this field)
+                #We've been asked to use the packet header must be zero for the 
+                #router_id/sudo ip address, so this field is redudent?
                 rip_entries += dest_router_id.to_bytes(4, byteorder="big")
                 
                 # must be zero
@@ -264,8 +267,7 @@ class router():
     
     def triggered_update(self, a):
         """for when a route becomes invalid"""
-        result = None
-        result = self.rip_packet_header(a)
+        raise NotImplementedError
 
 
     def periodic_update(self):
@@ -278,27 +280,17 @@ class router():
         raise NotImplementedError
 
 
-    def create_route_table(self, router_ids, input_ports, output_ports):
-        """creating the route table"""
-        route_table = {}
-        for port in output_ports:
-            value = (port[2], port[0])
-            route_table[value] = port[1]
-        self.route_table = route_table
-
-
     def add_route_to_table(self, route, metric):
         """adding a route to the route table. The key needs to be (router_id, portnum)"""
         self.route_table[route] = metric
-        self.triggered_update(route)
     
     
     def modify_route(self, route, n=1):
         """modifys the metric value of a route in the table"""
         self.route_table[route] += n
         if self.route_table[route] > 15:
-            self.route_table[route] = 'INF'
-        #self.triggered_update()
+            self.delete_route_in_table(route)
+            self.triggered_update()
 
 
     def delete_route_in_table(self, route):

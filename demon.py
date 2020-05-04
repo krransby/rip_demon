@@ -10,6 +10,7 @@ import sys
 import socket
 import threading
 import random
+import select
 
 class router():
     """
@@ -18,11 +19,15 @@ class router():
 
     router_ID = 0
     input_ports = []
-    output_ports = []
+    output_ports = {}
 
     input_sockets = []
     route_table = {}
     trash_panda_collector = 0
+    
+    # Variable for threading
+    packet_just_sent = False
+    periodic_update_timer = 0
 
     def __init__(self, config):
         """
@@ -86,7 +91,7 @@ class router():
                             if self.port_check(int(portstr)):
                                 if self.router_id_check(int(idstr)):
                                     
-                                    self.output_ports.append([int(portstr), int(metricstr), int(idstr)])
+                                    self.output_ports[int(idstr)] = (int(portstr), int(metricstr))
                                 else:
                                     self.error("Output router ID ({}) not within range 1 <= x <= 64000".format(int(idstr)))
                             else:
@@ -111,6 +116,7 @@ class router():
         self.start_sockets()
         
         #I was testing adding entries to the route table, it probably shouln't be there..
+        # All good, just checking :)
         
         # Start the infinite loop
         self.loop()
@@ -143,6 +149,10 @@ class router():
         """
         Print an error message in the console and close the demon
         """
+        
+        # Cancel the threading timer
+        self.periodic_update_timer.cancel()
+        
         if exit_code == 0:
             print("All is well, cya!")
         else:
@@ -164,10 +174,9 @@ class router():
                 if type(port) != type(1): # Checking to see if 'port' is an integer
                     break
                 
-                temp_socket = socket.socket()
-                temp_socket.settimeout(5)
+                temp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) # create a UDP socket
+                temp_socket.settimeout(1.0)
                 temp_socket.bind(('127.0.0.1', port))
-                temp_socket.listen()
                 
                 self.input_sockets.append(temp_socket)
         
@@ -175,23 +184,66 @@ class router():
             self.error("Error creating socket connection")
 
 
+    def restart_socket(self, sock):
+        """
+        Starts an individual socket to prevent forcable closing
+        """
+        
+        index = self.input_sockets.index(sock)
+        self.input_sockets.remove(sock)
+        sock.close()
+        portNum = self.input_ports[index]
+        
+        try:
+            
+            temp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) # create a UDP socket
+            temp_socket.settimeout(1.0)
+            temp_socket.bind(('127.0.0.1', portNum))
+            
+            self.input_sockets.insert(index, temp_socket)
+            
+        except socket.error:
+            self.error("Error creating socket connection")
+
+
+    def start_timers(self):
+        """
+        Starts the required timers for threading
+        """
+        
+        # Create a thread timer for a periodic update
+        # timerVal is the recommended range given on pg 7 of assignment handout
+        timerVal = random.uniform((0.8 * 6), (1.2 * 6))
+        self.periodic_update_timer = threading.Timer(timerVal, self.periodic_update)
+        self.periodic_update_timer.start()
+
+
     def loop(self):
         """
         The main loop of the routing demon
         """
         
-        # Create a thread timer for a periodic update
-        # timerVal is the recommended range given on pg 7 of assignment handout
-        #timerVal = random.uniform((0.8 * 6), (1.2 * 6))
-        #periodic_update_timer = threading.Timer(timerVal, self.periodic_update)
-        #periodic_update_timer.start()
+        # Add routers own entry to the table for initial send
+        self.add_route_to_table((self.router_ID, 0000), 0)
         
-        self.print_route_table()
+        # Thread for periodic update
+        self.start_timers()
         
-        # Testing packet creation and unpacking
-        packet = self.rip_packet_header((3, 6106))
-        print('Packet contents:')
-        self.process_packet(packet)
+        # Loop forever
+        while True:
+            # listen for incoming connection:
+            read_sockets, _, _ = select.select(self.input_sockets, [], [], 1.0)
+            
+            # check that a socket has activity only if a packet has not just been sent
+            if len(read_sockets) > 0 and not self.packet_just_sent:
+                for socket in read_sockets: # for every socket identified to have activity
+                    
+                    # read the packet contents and sender address (port)
+                    packet, address = socket.recvfrom(512)
+                    print('packet recieved from:', address, '\n')
+                    self.process_packet(packet)
+            
+            self.packet_just_sent = False
 
 
     def rip_packet_header(self, destination):
@@ -201,9 +253,10 @@ class router():
         packet_to_send = bytearray()
         
         # command field
-        command = 0 # <---Not sure what to put here ===========================================
-        #I've put in 2 in my version, since we are only implmenting the triggered and periodic updates
-        #which send the entire route table for some reason lol
+        command = 2
+        # I've put in 2 in my version, since we are only implmenting the triggered and periodic updates
+        # which send the entire route table for some reason lol
+        # Sounds good
         packet_to_send += command.to_bytes(1, byteorder="big")
         
         # version field
@@ -225,7 +278,7 @@ class router():
         # byte array to house each RIP entry (20 bytes each)
         rip_entries = bytearray()
         
-        dest_router_metric = self.route_table[destination]
+        dest_router_metric = destination[1]
         
         # generate a rip entry for every link in the route table
         for key, metric in self.route_table.items():
@@ -236,8 +289,9 @@ class router():
             if dest_router_id != destination[0]:
         
                 # address family
-                address_family = 2 # <---Not sure what to put here ===========================================
-                #I've looked, it should be 2
+                address_family = 2
+                # I've looked, it should be 2
+                # Nice
                 rip_entries += address_family.to_bytes(2, byteorder="big")
                 
                 # must be zero
@@ -247,6 +301,7 @@ class router():
                 # IPv4 address (we're to use the router ID for this field)
                 #We've been asked to use the packet header must be zero for the 
                 #router_id/sudo ip address, so this field is redudent?
+                # Maybe? could we use this for the poisened reverse or something?
                 rip_entries += dest_router_id.to_bytes(4, byteorder="big")
                 
                 # must be zero
@@ -263,8 +318,8 @@ class router():
             self.error("Problem generating RIP entries from table")
         else:
             return rip_entries
-    
-    
+
+
     def triggered_update(self, a):
         """for when a route becomes invalid"""
         raise NotImplementedError
@@ -272,21 +327,50 @@ class router():
 
     def periodic_update(self):
         """Function to handle periodic updates"""
-        raise NotImplementedError
-    
-    
-    def send_packet(self):
-        """sending the packet to the other 'routers'"""
-        raise NotImplementedError
+        
+        print('Sending periodic update.\n')
+        self.packet_just_sent = True
+        
+        # generate a packet for each link:
+        for destination, route_details in self.output_ports.items():
+            
+            output_port = route_details[0]
+            output_metric = route_details[1]
+            
+            packet = self.rip_packet_header((destination, output_metric))
+            
+            self.send_packet(packet, output_port)
+        
+        # Timers only work once, so they need to be restarted each time
+        timerVal = random.uniform((0.8 * 6), (1.2 * 6))
+        self.periodic_update_timer = threading.Timer(timerVal, self.periodic_update)
+        self.periodic_update_timer.start()
+
+
+    def send_packet(self, packet, port):
+        """Send the packet to the given port number"""
+        
+        sending_socket = self.input_sockets[0]
+        
+        address = ('127.0.0.1', port)
+        
+        # The socket has to be restarted after sending data
+        try:
+            sending_socket.sendto(packet, address)
+        finally:
+            self.restart_socket(sending_socket)
 
 
     def add_route_to_table(self, route, metric):
         """adding a route to the route table. The key needs to be (router_id, portnum)"""
         self.route_table[route] = metric
-    
+
+
     def convergence(sender_id, sender_metric):
-    """Using the current metirc and a given new metric and sender route_ID, see which of the two
-    has the better metric"""
+        """
+        Using the current metirc and a given new metric and sender route_ID, see which of the two
+        has the better metric
+        """
         current_best = None
         for key, value in route_table.items():
             if int(key[1]) == sender_id:
@@ -294,8 +378,9 @@ class router():
         if current_best != None:
             best_route = min(current_best, (1 + sender_metric))
             if best_route < current_best:
-                route_table[key] = best_route #this was editiied in at 20 past 1, don't judge 
-    
+                route_table[key] = best_route # this was editiied in at 20 past 1, don't judge
+
+
     def modify_route(self, route, n=1):
         """modifys the metric value of a route in the table"""
         self.route_table[route] += n
@@ -410,5 +495,5 @@ def main(param):
 
 if __name__ == "__main__":
     param = sys.argv
-    param = ['0', 'conf4.cfg']
+    #param = ['0', 'conf4.cfg']
     main(param)

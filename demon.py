@@ -23,7 +23,7 @@ class router():
 
     input_sockets = []
     route_table = {}
-    trash_panda_collector = 0
+    #Don't know what the collector was for..
     
     # Variable for threading
     packet_just_sent = False
@@ -241,7 +241,7 @@ class router():
                     # read the packet contents and sender address (port)
                     packet, address = socket.recvfrom(512)
                     print('packet recieved from:', address, '\n')
-                    self.process_packet(packet)
+                    self.process_packet(packet, address)
             
             self.packet_just_sent = False
 
@@ -268,7 +268,6 @@ class router():
         
         # rip entry
         packet_to_send += self.rip_entry(destination)
-        
         return packet_to_send
         
         
@@ -302,6 +301,7 @@ class router():
                 #We've been asked to use the packet header must be zero for the 
                 #router_id/sudo ip address, so this field is redudent?
                 # Maybe? could we use this for the poisened reverse or something?
+                #could do that
                 rip_entries += dest_router_id.to_bytes(4, byteorder="big")
                 
                 # must be zero
@@ -355,6 +355,7 @@ class router():
         address = ('127.0.0.1', port)
         
         # The socket has to be restarted after sending data
+        #Why is this the case? It seems really odd..
         try:
             sending_socket.sendto(packet, address)
         finally:
@@ -363,22 +364,26 @@ class router():
 
     def add_route_to_table(self, route, metric):
         """adding a route to the route table. The key needs to be (router_id, portnum)"""
-        self.route_table[route] = metric
+        try:
+            self.route_table[route]
+            return True
+        except KeyError:
+            self.route_table[route] = metric
 
 
-    def convergence(sender_id, sender_metric):
+    def convergence(self, sender_id, sender_metric):
         """
         Using the current metirc and a given new metric and sender route_ID, see which of the two
         has the better metric
         """
         current_best = None
-        for key, value in route_table.items():
-            if int(key[1]) == sender_id:
-                current_best = route_table[key]
+        for key, value in self.route_table.items():
+            if int(key[1]) == sender_id[1]:
+                current_best = self.route_table[key]
         if current_best != None:
             best_route = min(current_best, (1 + sender_metric))
             if best_route < current_best:
-                route_table[key] = best_route # this was editiied in at 20 past 1, don't judge
+                self.route_table[key] = best_route # this was editiied in at 20 past 1, don't judge
 
 
     def modify_route(self, route, n=1):
@@ -401,12 +406,14 @@ class router():
     def print_route_table(self):
         """Prints the contents of the route table in a readable way"""
         print("Current routing table for Router {}:".format(self.router_ID))
+        print('=' * 45)
         for key, metric in self.route_table.items():
             print("Destination: {} | Via Link: {} | Metric: {}".format(key[0], key[1], metric))
+        print('=' * 45)
         print()
 
 
-    def process_packet(self, packet):
+    def process_packet(self, packet, address):
         """Unpack and processes a recieved packet and its RIP entries"""
         
         # Unpack header:
@@ -463,18 +470,18 @@ class router():
                     # Remove the route from the table
                     keep_rip_entry = False
                     #self.delete_route_in_table()
-                
                 else:
                     print("RIP entry for router {} has an invalid metric ({}), omitting entry.".format(destination, metric))
                     keep_rip_entry = False
-            
             # If there are no issues with the current rip entry
             if keep_rip_entry:
+                port_num = address[1]
+                router_key = (destination, port_num)
+                self.add_route_to_table(router_key, metric)  #see if it's already in the route_table
+                self.print_route_table()
                 
                 # Code to compare to routing table goes here.
                 pass
-            
-            
             print('\nRip entry {}:\n\tAddress Family: {}\n\tDestination: {}\n\tCost: {}\n'.format(i+1, address_family, destination, metric)) # <---TEMPORARY LINE FOR TESTING ============
 
 
@@ -495,5 +502,4 @@ def main(param):
 
 if __name__ == "__main__":
     param = sys.argv
-    #param = ['0', 'conf4.cfg']
     main(param)

@@ -24,9 +24,9 @@ class router():
     input_sockets = []
     route_table = {}
     #Don't know what the collector was for..
+    # Was it a timer for trash collection?
     
-    # Variable for threading
-    packet_just_sent = False
+    # Timer Variables
     periodic_update_timer = 0
 
     def __init__(self, config):
@@ -115,9 +115,6 @@ class router():
         # Bind input ports to a socket
         self.start_sockets()
         
-        #I was testing adding entries to the route table, it probably shouln't be there..
-        # All good, just checking :)
-        
         # Start the infinite loop
         self.loop()
         
@@ -184,28 +181,6 @@ class router():
             self.error("Error creating socket connection")
 
 
-    def restart_socket(self, sock):
-        """
-        Starts an individual socket to prevent forcable closing
-        """
-        
-        index = self.input_sockets.index(sock)
-        self.input_sockets.remove(sock)
-        sock.close()
-        portNum = self.input_ports[index]
-        
-        try:
-            
-            temp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) # create a UDP socket
-            temp_socket.settimeout(1.0)
-            temp_socket.bind(('127.0.0.1', portNum))
-            
-            self.input_sockets.insert(index, temp_socket)
-            
-        except socket.error:
-            self.error("Error creating socket connection")
-
-
     def start_timers(self):
         """
         Starts the required timers for threading
@@ -235,15 +210,19 @@ class router():
             read_sockets, _, _ = select.select(self.input_sockets, [], [], 1.0)
             
             # check that a socket has activity only if a packet has not just been sent
-            if len(read_sockets) > 0 and not self.packet_just_sent:
+            if len(read_sockets) > 0:
                 for socket in read_sockets: # for every socket identified to have activity
                     
-                    # read the packet contents and sender address (port)
-                    packet, address = socket.recvfrom(512)
-                    print('packet recieved from:', address, '\n')
-                    self.process_packet(packet, address)
-            
-            self.packet_just_sent = False
+                    # This try statement prevents the port from reading its own message
+                    try:
+                        # read the packet contents and sender address (port)
+                        packet, address = socket.recvfrom(1024)
+                        
+                        print('Packet recieved from:', address, '\n')
+                        self.process_packet(packet, address)
+                        
+                    except:
+                        pass
 
 
     def rip_packet_header(self, destination):
@@ -269,8 +248,8 @@ class router():
         # rip entry
         packet_to_send += self.rip_entry(destination)
         return packet_to_send
-        
-        
+
+
     def rip_entry(self, destination):
         """Function for generating a RIP entries (len = 20 bytes)"""
         
@@ -286,11 +265,9 @@ class router():
             
             # make sure we're not sending the destination its own link
             if dest_router_id != destination[0]:
-        
+                
                 # address family
                 address_family = 2
-                # I've looked, it should be 2
-                # Nice
                 rip_entries += address_family.to_bytes(2, byteorder="big")
                 
                 # must be zero
@@ -354,12 +331,8 @@ class router():
         
         address = ('127.0.0.1', port)
         
-        # The socket has to be restarted after sending data
-        #Why is this the case? It seems really odd..
-        try:
-            sending_socket.sendto(packet, address)
-        finally:
-            self.restart_socket(sending_socket)
+        # No worries, all fixed now
+        sending_socket.sendto(packet, address)
 
 
     def add_route_to_table(self, route, metric):
@@ -369,6 +342,7 @@ class router():
             return True
         except KeyError:
             self.route_table[route] = metric
+            return False
 
 
     def convergence(self, sender_id, sender_metric):
@@ -409,8 +383,8 @@ class router():
         print('=' * 45)
         for key, metric in self.route_table.items():
             print("Destination: {} | Via Link: {} | Metric: {}".format(key[0], key[1], metric))
-        print('=' * 45)
-        print()
+        print('=' * 45, '\n')
+        # the routing table printout looks really pretty now
 
 
     def process_packet(self, packet, address):
@@ -420,27 +394,27 @@ class router():
         
         # Command field
         command = int.from_bytes(packet[0:1], byteorder='big')
-        print('command:', command) # <---TEMPORARY LINE FOR TESTING ============
+        #print('command:', command) # <---TEMPORARY LINE FOR TESTING ============
         
         # Version field
         version_num = int.from_bytes(packet[1:2], byteorder='big')
         if not self.rip_version_check(version_num): # Check if the version number is 2 (it should always be 2)
             print("Packet has invalid version number, dropping packet")
             return False
-        print('version_num:', version_num) # <---TEMPORARY LINE FOR TESTING ============
+        #print('version_num:', version_num) # <---TEMPORARY LINE FOR TESTING ============
         
         # Sending router's ID
         sender_id = int.from_bytes(packet[2:4], byteorder='big')
         if not self.router_id_check(sender_id): # check if the sending router's ID is valid
             print("Packet sent from router with invalid ID, dropping packet")
             return False
-        print('sender_id:', sender_id) # <---TEMPORARY LINE FOR TESTING ============
+        #print('sender_id:', sender_id) # <---TEMPORARY LINE FOR TESTING ============
         
         # Unpack RIP entries:
         
         # Calculate the number of RIP entries in the packet
         num_entries = int((len(packet[4:]) / 20))
-        print('num_entries:', num_entries) # <---TEMPORARY LINE FOR TESTING ============
+        #print('num_entries:', num_entries) # <---TEMPORARY LINE FOR TESTING ============
         
         # Retrieve data from each RIP entry
         for i in range(num_entries):
@@ -462,30 +436,41 @@ class router():
             
             # Metric field (cost to reach destination router being advertised)
             metric = int.from_bytes(packet[position + 16 : position + 20], byteorder='big')
+            if not self.metric_check(metric):
+                keep_rip_entry = False
             
-            # check the metric value
-            if not self.metric_check(metric) and keep_rip_entry:
-                if metric == 16: # metric of infinity
+            if not keep_rip_entry:
+                if metric == 16 and destination != self.router_ID: # metric of infinity
                     print("RIP entry for router {} has metric 16 (infinity), removing from routing table.".format(destination))
                     # Remove the route from the table
                     keep_rip_entry = False
-                    #self.delete_route_in_table()
-                else:
-                    print("RIP entry for router {} has an invalid metric ({}), omitting entry.".format(destination, metric))
-                    keep_rip_entry = False
+                    port = self.output_ports[sender_id][0]
+                    
+                    self.delete_route_in_table((destination, port))
+            
             # If there are no issues with the current rip entry
             if keep_rip_entry:
-                port_num = address[1]
-                router_key = (destination, port_num)
-                self.add_route_to_table(router_key, metric)  #see if it's already in the route_table
+                
+                key = (destination, self.output_ports[sender_id][0])
+                
+                in_table = self.add_route_to_table(key, metric)
+                
+                if in_table:
+                    self.convergence(sender_id, metric)
+                
+                
+                # Sorry, I was testing the above code
+                
+                #port_num = address[1]
+                #router_key = (destination, port_num)
+                #self.add_route_to_table(router_key, metric):  #see if it's already in the route_table
+                
                 self.print_route_table()
                 
-                # Code to compare to routing table goes here.
-                pass
-            print('\nRip entry {}:\n\tAddress Family: {}\n\tDestination: {}\n\tCost: {}\n'.format(i+1, address_family, destination, metric)) # <---TEMPORARY LINE FOR TESTING ============
+            #print('\nRip entry {}:\n\tAddress Family: {}\n\tDestination: {}\n\tCost: {}\n'.format(i+1, address_family, destination, metric)) # <---TEMPORARY LINE FOR TESTING ============
 
 
-    
+
 def main(param):
     """
     Main exicution function

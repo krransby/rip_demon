@@ -25,6 +25,12 @@ class router():
     route_table = {}
 
     # Timer Variables
+    update_interval = 30
+    timeout_interval = 180
+    garbage_collection_interval = 120
+    division_factor = 30
+    
+    
     periodic_update_timer = 0
 
     def __init__(self, config):
@@ -132,7 +138,7 @@ class router():
 
     def metric_check(self, metric):
         """returns false if the metric is not within the bounds, will also trigger a dead-timer."""
-        return True if metric > 0 and metric < 16 else False
+        return True if metric >= 0 and metric <= 16 else False
 
 
     def rip_version_check(self, value):
@@ -179,16 +185,42 @@ class router():
             self.error("Error creating socket connection")
 
 
-    def start_timers(self):
+    def start_periodic_update_timer(self):
         """
-        Starts the required timers for threading
+        Starts the periodic timer for threading
         """
+        
+        interval = self.update_interval / self.division_factor
         
         # Create a thread timer for a periodic update
         # timerVal is the recommended range given on pg 7 of assignment handout
-        timerVal = random.uniform((0.8 * 6), (1.2 * 6))
+        timerVal = random.uniform((0.8 * interval), (1.2 * interval))
         self.periodic_update_timer = threading.Timer(timerVal, self.periodic_update)
         self.periodic_update_timer.start()
+
+
+    def start_route_timeout_timer(self, route):
+        """
+        Starts a timeout timer for a given route in the table.
+        """
+        
+        interval = self.timeout_interval / self.division_factor
+        route_timeout_timer = threading.Timer(interval, self.route_timed_out, [route])
+        route_timeout_timer.start()
+        
+        return route_timeout_timer
+
+
+    def start_garbage_collection_timer(self, route):
+        """
+        Starts the garbage collection timer when a route timer expires
+        """
+        
+        interval = self.garbage_collection_interval / self.division_factor
+        garbage_collection_timer = threading.Timer(interval, self.delete_route_in_table, [route])
+        garbage_collection_timer.start()
+        
+        return garbage_collection_timer
 
 
     def loop(self):
@@ -197,10 +229,10 @@ class router():
         """
         
         # Add routers own entry to the table for initial send
-        self.add_route_to_table(self.router_ID, (0000, 0))
+        self.route_table[self.router_ID] = (0, 0)
         
         # Thread for periodic update
-        self.start_timers()
+        self.start_periodic_update_timer()
         
         # Loop forever
         while True:
@@ -226,7 +258,7 @@ class router():
                         pass
 
 
-    def rip_packet_header(self, destination):
+    def rip_packet_header(self, destination, dest_details):
         """what every packet needs for its header"""
         
         # byte array to house the RIP header (4 bytes) and all the RIP entries (20 bytes each)
@@ -234,9 +266,6 @@ class router():
         
         # command field
         command = 2
-        # I've put in 2 in my version, since we are only implmenting the triggered and periodic updates
-        # which send the entire route table for some reason lol
-        # Sounds good
         packet_to_send += command.to_bytes(1, byteorder="big")
         
         # version field
@@ -247,11 +276,11 @@ class router():
         packet_to_send += self.router_ID.to_bytes(2, byteorder="big")
         
         # rip entry
-        packet_to_send += self.rip_entry(destination)
+        packet_to_send += self.rip_entry(destination, dest_details)
         return packet_to_send
 
 
-    def rip_entry(self, destination):
+    def rip_entry(self, destination, dest_details):
         """Function for generating a RIP entries (len = 20 bytes)"""
         
         # byte array to house each RIP entry (20 bytes each)
@@ -259,34 +288,36 @@ class router():
         
         # generate a rip entry for every link in the route table
         for dest_router_id, route_details in self.route_table.items():
-            metric = route_details[1] + destination[1]
+            metric = route_details[1]
             
-            # make sure we're not sending the destination its own link
-            if dest_router_id != destination[0]:
+            # split horizon with poisoned reverse:
+            if route_details[0] == dest_details[0]:
                 
-                # address family
-                address_family = 2
-                rip_entries += address_family.to_bytes(2, byteorder="big")
+                metric = 16
                 
-                # must be zero
-                must_be_zero = 0
-                rip_entries += must_be_zero.to_bytes(2, byteorder="big")
-                
-                # IPv4 address (we're to use the router ID for this field)
-                #We've been asked to use the packet header must be zero for the 
-                #router_id/sudo ip address, so this field is redudent?
-                # Maybe? could we use this for the poisened reverse or something?
-                #could do that
-                rip_entries += dest_router_id.to_bytes(4, byteorder="big")
-                
-                # must be zero
-                rip_entries += must_be_zero.to_bytes(4, byteorder="big")
-                
-                # must be zero
-                rip_entries += must_be_zero.to_bytes(4, byteorder="big")
-                
-                # metric
-                rip_entries += metric.to_bytes(4, byteorder="big")
+            # address family
+            address_family = 2
+            rip_entries += address_family.to_bytes(2, byteorder="big")
+            
+            # must be zero
+            must_be_zero = 0
+            rip_entries += must_be_zero.to_bytes(2, byteorder="big")
+            
+            # IPv4 address (we're to use the router ID for this field)
+            #We've been asked to use the packet header must be zero for the 
+            #router_id/sudo ip address, so this field is redudent?
+            # Maybe? could we use this for the poisened reverse or something?
+            #could do that
+            rip_entries += dest_router_id.to_bytes(4, byteorder="big")
+            
+            # must be zero
+            rip_entries += must_be_zero.to_bytes(4, byteorder="big")
+            
+            # must be zero
+            rip_entries += must_be_zero.to_bytes(4, byteorder="big")
+            
+            # metric
+            rip_entries += metric.to_bytes(4, byteorder="big")
         
         if len(rip_entries) % 20 != 0:
             # error in generating rip entries
@@ -308,17 +339,11 @@ class router():
         # generate a packet for each link:
         for destination, route_details in self.output_ports.items():
             
-            output_port = route_details[0]
-            output_metric = route_details[1]
+            packet = self.rip_packet_header(destination, route_details)
             
-            packet = self.rip_packet_header((destination, output_metric))
-            
-            self.send_packet(packet, output_port)
+            self.send_packet(packet, route_details[0])
         
-        # Timers only work once, so they need to be restarted each time
-        timerVal = random.uniform((0.8 * 6), (1.2 * 6))
-        self.periodic_update_timer = threading.Timer(timerVal, self.periodic_update)
-        self.periodic_update_timer.start()
+        self.start_periodic_update_timer()
 
 
     def send_packet(self, packet, port):
@@ -335,9 +360,11 @@ class router():
     def add_route_to_table(self, route, details):
         """adding a route to the route table."""
         try:
+            # Route in table:
             self.route_table[route]
             return True
         except KeyError:
+            # Route not in table
             self.route_table[route] = details
             return False
 
@@ -435,16 +462,12 @@ class router():
             if not self.metric_check(metric):
                 keep_rip_entry = False
             
-            if not keep_rip_entry:
-                if metric == 16 and destination != self.router_ID: # metric of infinity
-                    print("RIP entry for router {} has metric 16 (infinity), removing from routing table.".format(destination))
-                    # Remove the route from the table
-                    keep_rip_entry = False
-                    
-                    self.delete_route_in_table(destination)
-            
             # If there are no issues with the current rip entry
             if keep_rip_entry:
+                
+                cost = self.output_ports[sender_id][1]
+                
+                metric = min(metric + cost, 16)
                 
                 route_details = (self.output_ports[sender_id][0], metric)
                 

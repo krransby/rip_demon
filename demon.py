@@ -23,9 +23,7 @@ class router():
 
     input_sockets = []
     route_table = {}
-    #Don't know what the collector was for..
-    # Was it a timer for trash collection?
-    
+
     # Timer Variables
     periodic_update_timer = 0
 
@@ -199,7 +197,7 @@ class router():
         """
         
         # Add routers own entry to the table for initial send
-        self.add_route_to_table((self.router_ID, 0000), 0)
+        self.add_route_to_table(self.router_ID, (0000, 0))
         
         # Thread for periodic update
         self.start_timers()
@@ -216,10 +214,13 @@ class router():
                     # This try statement prevents the port from reading its own message
                     try:
                         # read the packet contents and sender address (port)
-                        packet, address = socket.recvfrom(1024)
+                        packet, address = socket.recvfrom(512)
                         
-                        print('Packet recieved from:', address, '\n')
+                        print('Packet recieved from router:', address, '\n')
+                        
                         self.process_packet(packet, address)
+                        
+                        self.print_route_table()
                         
                     except:
                         pass
@@ -256,12 +257,9 @@ class router():
         # byte array to house each RIP entry (20 bytes each)
         rip_entries = bytearray()
         
-        dest_router_metric = destination[1]
-        
         # generate a rip entry for every link in the route table
-        for key, metric in self.route_table.items():
-            dest_router_id = key[0]
-            metric += dest_router_metric
+        for dest_router_id, route_details in self.route_table.items():
+            metric = route_details[1] + destination[1]
             
             # make sure we're not sending the destination its own link
             if dest_router_id != destination[0]:
@@ -306,7 +304,6 @@ class router():
         """Function to handle periodic updates"""
         
         print('Sending periodic update.\n')
-        self.packet_just_sent = True
         
         # generate a packet for each link:
         for destination, route_details in self.output_ports.items():
@@ -335,29 +332,27 @@ class router():
         sending_socket.sendto(packet, address)
 
 
-    def add_route_to_table(self, route, metric):
-        """adding a route to the route table. The key needs to be (router_id, portnum)"""
+    def add_route_to_table(self, route, details):
+        """adding a route to the route table."""
         try:
             self.route_table[route]
             return True
         except KeyError:
-            self.route_table[route] = metric
+            self.route_table[route] = details
             return False
 
 
-    def convergence(self, sender_id, sender_metric):
+    def convergence(self, destination, new_route_details):
         """
         Using the current metirc and a given new metric and sender route_ID, see which of the two
         has the better metric
         """
-        current_best = None
-        for key, value in self.route_table.items():
-            if int(key[1]) == sender_id[1]:
-                current_best = self.route_table[key]
-        if current_best != None:
-            best_route = min(current_best, (1 + sender_metric))
-            if best_route < current_best:
-                self.route_table[key] = best_route # this was editiied in at 20 past 1, don't judge
+        
+        for route_id, route_details in self.route_table.items():
+            
+            if route_id == destination:
+                if new_route_details[1] < self.route_table[route_id][1]:
+                    self.route_table[route_id] = new_route_details
 
 
     def modify_route(self, route, n=1):
@@ -381,8 +376,9 @@ class router():
         """Prints the contents of the route table in a readable way"""
         print("Current routing table for Router {}:".format(self.router_ID))
         print('=' * 45)
-        for key, metric in self.route_table.items():
-            print("Destination: {} | Via Link: {} | Metric: {}".format(key[0], key[1], metric))
+        for route, details in sorted(self.route_table.items()):
+            if route != self.router_ID:
+                print("Destination: {} | Via Link: {} | Metric: {}".format(route, details[0], details[1]))
         print('=' * 45, '\n')
         # the routing table printout looks really pretty now
 
@@ -444,28 +440,21 @@ class router():
                     print("RIP entry for router {} has metric 16 (infinity), removing from routing table.".format(destination))
                     # Remove the route from the table
                     keep_rip_entry = False
-                    port = self.output_ports[sender_id][0]
                     
-                    self.delete_route_in_table((destination, port))
+                    self.delete_route_in_table(destination)
             
             # If there are no issues with the current rip entry
             if keep_rip_entry:
                 
-                key = (destination, self.output_ports[sender_id][0])
+                route_details = (self.output_ports[sender_id][0], metric)
                 
-                in_table = self.add_route_to_table(key, metric)
+                in_table = self.add_route_to_table(destination, route_details)
                 
                 if in_table:
-                    self.convergence(sender_id, metric)
+                    self.convergence(destination, route_details)
                 
                 
-                # Sorry, I was testing the above code
-                
-                #port_num = address[1]
-                #router_key = (destination, port_num)
-                #self.add_route_to_table(router_key, metric):  #see if it's already in the route_table
-                
-                self.print_route_table()
+                #self.print_route_table()
                 
             #print('\nRip entry {}:\n\tAddress Family: {}\n\tDestination: {}\n\tCost: {}\n'.format(i+1, address_family, destination, metric)) # <---TEMPORARY LINE FOR TESTING ============
 

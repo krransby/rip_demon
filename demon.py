@@ -5,13 +5,12 @@
     Sjaak Flick (36406121)
 """
 
-import os
-import sys
-import socket
-import threading
-import random
-import select
-import time
+import sys          # For terminal arguments
+import socket       # For creating and using sockets
+import threading    # For timer objects
+import random       # For generating random timer values
+import select       # For reading from all input ports simultaneously
+import time         # For printing the timer values on the screen
 
 class router():
     """
@@ -37,7 +36,7 @@ class router():
     
     # Timer Variables
     # Division factor of the standard RIP timer values
-    division_factor = 5
+    division_factor = 30
     
     # Interval the periodic updates will occur at
     update_interval = 30 / division_factor
@@ -142,7 +141,7 @@ class router():
         # Add routers own entry to the table for initial send
         self.route_table[self.router_ID] = (0, 0)
         
-        # Thread for periodic update
+        # Start thread timer for periodic update
         self.start_periodic_timer()
         
         # Start the infinite loop
@@ -166,7 +165,7 @@ class router():
         """
         returns false if the metric is not within the bounds, will also trigger a dead-timer.
         """
-        return True if metric >= 0 and metric <= 16 else False
+        return True if metric >= 1 and metric <= 16 else False
 
 
     def rip_version_check(self, value):
@@ -218,12 +217,13 @@ class router():
 
     def start_periodic_timer(self):
         """
-        Starts the periodic timer for threading
+        Starts the threading timer for periodic updates
         """
         
-        # Create a thread timer for a periodic update
         # timerVal is the recommended range given on pg 7 of assignment handout
         timerVal = random.uniform((0.8 * self.update_interval), (1.2 * self.update_interval))
+        
+        # Create a thread timer for a periodic update
         self.periodic_update_timer = threading.Timer(timerVal, self.periodic_update)
         self.periodic_update_timer.start()
 
@@ -231,6 +231,7 @@ class router():
     def start_route_timeout_timer(self, route):
         """
         Starts a timeout timer for a given route in the table.
+        Calls route_timed_out when timer expires
         """
         
         route_timeout_timer = threading.Timer(self.timeout_interval, self.route_timed_out, (route, ))
@@ -241,7 +242,8 @@ class router():
 
     def start_garbage_collection_timer(self, route):
         """
-        Starts the garbage collection timer when a route timer expires
+        Starts the garbage collection timer for a given route in the table.
+        Calls delete_route_in_table when timer expires
         """
         
         garbage_collection_timer = threading.Timer(self.garbage_collection_interval, self.delete_route_in_table, (route, ))
@@ -260,25 +262,23 @@ class router():
             # listen for incoming connection:
             read_sockets, _, _ = select.select(self.input_sockets, [], [], 1.0)
             
-            # check that a socket has activity only if a packet has not just been sent
-            if len(read_sockets) > 0:
-                for socket in read_sockets: # for every socket identified to have activity
+            for socket in read_sockets: # for every socket identified to have activity
+                
+                # This try statement prevents port errors
+                try:
+                    # read the packet contents and sender address (port)
+                    packet, address = socket.recvfrom(512)
                     
-                    # This try statement prevents port errors
-                    try:
-                        # read the packet contents and sender address (port)
-                        packet, address = socket.recvfrom(512)
+                    # Make sure we're not reading from our own port
+                    if address[1] not in self.input_ports:
+                        print('Packet recieved from router:', address, '\n')
                         
-                        # Make sure we're not reading from our own port
-                        if address[1] not in self.input_ports:
-                            print('Packet recieved from router:', address, '\n')
-                            
-                            self.process_packet(packet, address)
-                            
-                            self.print_route_table()
+                        self.process_packet(packet, address)
                         
-                    except:
-                        pass
+                        self.print_route_table()
+                    
+                except:
+                    pass
 
 
     def rip_packet_header(self, destination, dest_details):
@@ -330,7 +330,7 @@ class router():
             must_be_zero = 0
             rip_entries += must_be_zero.to_bytes(2, byteorder="big")
             
-            # IPv4 address (we're to use the router ID for this field)
+            # IPv4 address (destination router ID)
             rip_entries += dest_router_id.to_bytes(4, byteorder="big")
             
             # must be zero
@@ -359,9 +359,10 @@ class router():
 
     def periodic_update(self, triggered=False):
         """
-        Function to handle periodic updates
+        Function to handle periodic and triggered updates
         """
         
+        # Print a different message depending on the type of update
         if not triggered:
             print('Sending periodic update.\n')
         else:
@@ -396,15 +397,19 @@ class router():
 
     def add_route_to_table(self, route, details):
         """
-        Adding a route to the route table.
+        Checks if a route is already in the route table, returns true if it is.
+        Otherwise, add the new route to the table and return false if metric < 16.
         """
         
         if route in self.route_table:
+            # Return true if the route is already in the table
             return True
         else:
-            
-            if details[1] < 16:
+            if details[1] < 16: # Add the route to the table if the metric is less than 16
+                # Start a new timeout timer for the route
                 timer = (self.start_route_timeout_timer(route), time.time() + self.timeout_interval)
+                
+                # Add the route to the route table
                 self.route_table[route] = (details[0], details[1], timer, None)
             return False
 
@@ -414,37 +419,37 @@ class router():
         Using the current route details from the route table and the given new route details of a given destination,
         see which of the two has the better metric.
         """
-        
+    
         # Get current route details from the route table
         route_details = self.route_table[destination]
-        
+    
         # If this datagram is from the same router as the existing route, reinitialize the timeout.
         if route_details[0] == new_route_details[0]:
-            
+    
             # Cancel route timeout
             route_details[2][0].cancel()
-            
+    
             # Cancel route garbage collection
             if route_details[1] != 16 and route_details[3] != None:
                 route_details[3][0].cancel()
-            
+    
             # Create new route timeout 
             timer = (self.start_route_timeout_timer(destination), time.time() + self.timeout_interval)
             self.route_table[destination] = (route_details[0], route_details[1], timer, None)
-        
-        
+    
+    
         # If the datagram is from the same router as the existing route, and the new metric is different
         # than the old one; or, if the new metric is lower than the old one; do the following actions:
         if (route_details[0] == new_route_details[0] and route_details[1] != new_route_details[1]) or route_details[1] > new_route_details[1]:
-            
+    
             # Addopt the new route details
             self.route_table[destination] = (new_route_details[0], new_route_details[1], self.route_table[destination][2], None)
-            
+    
             if new_route_details[1] == 16 and route_details[3] == None:
                 # Start deletion process:
                 self.drop_route(destination)
-            
-            
+    
+    
             return True # Trigger an update
         return False # Don't Trigger an update
 
@@ -453,14 +458,16 @@ class router():
         """
         Starts the deletion process of the given route
         """
-        
-        # Retrieve the current routes details form the route table
-        route_details = self.route_table[route]
-        
-        # Start a new garbage collection time for the given route
-        timer = (self.start_garbage_collection_timer(route), time.time() + self.garbage_collection_interval)
-        
-        self.route_table[route] = (route_details[0], 16, route_details[2], timer)
+        try:
+            # Retrieve the current routes details form the route table
+            route_details = self.route_table[route]
+            
+            # Start a new garbage collection time for the given route
+            timer = (self.start_garbage_collection_timer(route), time.time() + self.garbage_collection_interval)
+            
+            self.route_table[route] = (route_details[0], 16, route_details[2], timer)
+        except KeyError:
+            pass
 
 
     def delete_route_in_table(self, route):
@@ -469,6 +476,15 @@ class router():
         """
         try:
             if route in self.route_table:
+                
+                # Make sure the route timeout is cancelled
+                if self.route_table[route][2] != None:
+                    self.route_table[route][2][0].cancel()
+                
+                # Make sure the route garbage collection is cancelled
+                if self.route_table[route][3] != None:
+                    self.route_table[route][3][0].cancel()
+                
                 del self.route_table[route]
         except KeyError:
             return self.error("Route is not in the table")
@@ -498,7 +514,7 @@ class router():
             if route != self.router_ID: # don't print the router's own RIP entry
                 
                 # Get timeout value
-                if details[2][1] - time.time() > 0:
+                if details[2] != None and details[2][1] - time.time() > 0:
                     timeout = details[2][1] - time.time()
                 else:
                     timeout = 0
@@ -524,27 +540,23 @@ class router():
         
         # Command field
         command = int.from_bytes(packet[0:1], byteorder='big')
-        #print('command:', command) # <---TEMPORARY LINE FOR TESTING ============
         
         # Version field
         version_num = int.from_bytes(packet[1:2], byteorder='big')
         if not self.rip_version_check(version_num): # Check if the version number is 2 (it should always be 2)
             print("Packet has invalid version number, dropping packet")
             return 
-        #print('version_num:', version_num) # <---TEMPORARY LINE FOR TESTING ============
         
         # Sending router's ID
         sender_id = int.from_bytes(packet[2:4], byteorder='big')
         if not self.router_id_check(sender_id): # check if the sending router's ID is valid
             print("Packet sent from router with invalid ID, dropping packet")
             return 
-        #print('sender_id:', sender_id) # <---TEMPORARY LINE FOR TESTING ============
         
         # Unpack RIP entries:
         
         # Calculate the number of RIP entries in the packet
         num_entries = int((len(packet[4:]) / 20))
-        #print('num_entries:', num_entries) # <---TEMPORARY LINE FOR TESTING ============
         
         # Retrieve data from each RIP entry
         for i in range(num_entries):
@@ -562,22 +574,18 @@ class router():
             destination = int.from_bytes(packet[position + 4 : position + 8], byteorder='big')
             if not self.router_id_check(destination) or destination == self.router_ID:
                 keep_rip_entry = False
-                #print("RIP entry has an invalid destination router ID ({}), omitting entry.".format(destination))
             
             # Metric field (cost to reach destination router being advertised)
             metric = int.from_bytes(packet[position + 16 : position + 20], byteorder='big')
+            
+            cost = self.output_ports[sender_id][1]
+            metric = min(metric + cost, 16)
+            
             if not self.metric_check(metric):
                 keep_rip_entry = False
-                print("RIP entry has an invalid metric ({}), omitting entry.".format(metric))
                 
             # If there are no issues with the current rip entry
             if keep_rip_entry:
-                
-                cost = self.output_ports[sender_id][1]
-                
-                metric = min(metric + cost, 16)
-                
-                #print('\nRip entry {}:\n\tAddress Family: {}\n\tDestination: {}\n\tCost: {}\n'.format(i+1, address_family, destination, metric)) # <---TEMPORARY LINE FOR TESTING ============
                 
                 route_details = (self.output_ports[sender_id][0], metric)
                 

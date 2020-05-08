@@ -181,7 +181,8 @@ class router():
         """
         
         # Cancel threading timers
-        self.periodic_update_timer.cancel()
+        if self.periodic_update_timer != 0:
+            self.periodic_update_timer.cancel()
         
         if exit_code == 0:
             print("All is well, cya!")

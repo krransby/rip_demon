@@ -36,7 +36,7 @@ class router():
     
     # Timer Variables
     # Division factor of the standard RIP timer values
-    division_factor = 30
+    division_factor = 30 # <--- Make this value smaller to slow the code down ===============================================================
     
     # Interval the periodic updates will occur at
     update_interval = 30 / division_factor
@@ -272,7 +272,7 @@ class router():
                     
                     # Make sure we're not reading from our own port
                     if address[1] not in self.input_ports:
-                        print('Packet recieved from router:', address, '\n')
+                        #print('Packet recieved from router:', address, '\n')
                         
                         self.process_packet(packet, address)
                         
@@ -364,10 +364,10 @@ class router():
         """
         
         # Print a different message depending on the type of update
-        if not triggered:
-            print('Sending periodic update.\n')
-        else:
-            print('Sending triggered update.\n')
+        #if not triggered:
+            #print('Sending periodic update.\n')
+        #else:
+            #print('Sending triggered update.\n')
         
         # generate a packet for each link:
         for destination, route_details in self.output_ports.items():
@@ -493,10 +493,10 @@ class router():
 
     def route_timed_out(self, route):
         """
-        Function that is called when a function times out
+        Function that is called when a route times out
         """
         
-        print('Route to router {} timed out.\n'.format(route))
+        #print('Route to router {} timed out.\n'.format(route))
         
         self.drop_route(route)
 
@@ -508,6 +508,7 @@ class router():
         
         timeout = 0 # variable for holding the timout counter
         garbage = 0 # variable for holding the garbage collection counter
+        next_hop = 0
         
         print("Current routing table for Router {}:".format(self.router_ID))
         print('=' * 78)
@@ -525,8 +526,12 @@ class router():
                     garbage = details[3][1] - time.time()
                 else:
                     garbage = 0
-                    
-                print("Destination: {} | Via Link: {} | Metric: {} | TimeOut: {:.2f} | Garbage: {:.2f}".format(route, details[0], details[1], timeout, garbage))
+                
+                for route_ID, route_details in self.output_ports.items():
+                    if route_details[0] == details[0]:
+                        next_hop = route_ID
+                
+                print("Destination: {} | Next Hop: {} | Metric: {} | TimeOut: {:.2f} | Garbage: {:.2f}".format(route, next_hop, details[1], timeout, garbage))
         print('=' * 78, '\n')
 
 
@@ -545,13 +550,13 @@ class router():
         # Version field
         version_num = int.from_bytes(packet[1:2], byteorder='big')
         if not self.rip_version_check(version_num): # Check if the version number is 2 (it should always be 2)
-            print("Packet has invalid version number, dropping packet")
+            #print("Packet has invalid version number, dropping packet")
             return 
         
         # Sending router's ID
         sender_id = int.from_bytes(packet[2:4], byteorder='big')
         if not self.router_id_check(sender_id): # check if the sending router's ID is valid
-            print("Packet sent from router with invalid ID, dropping packet")
+            #print("Packet sent from router with invalid ID, dropping packet")
             return 
         
         # Unpack RIP entries:
